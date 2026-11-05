@@ -41,6 +41,11 @@ DEFAULTS = {
     "audio_format": "MP3",
     "audio_quality": "Best",
     "playlist": False,
+    "thumbnail": False,
+    "metadata": True,
+    "subtitles": False,
+    "sub_langs": "en",
+    "sponsorblock": False,
 }
 
 # Plain-language explanations for common yt-dlp errors (first match wins).
@@ -115,7 +120,8 @@ def resolve_ytdlp(setting: str):
             p = p / ("yt-dlp.exe" if IS_WINDOWS else "yt-dlp")
         if p.is_file():
             return str(p)
-    return shutil.which("yt-dlp")
+    local = app_dir() / ("yt-dlp.exe" if IS_WINDOWS else "yt-dlp")
+    return str(local) if local.is_file() else shutil.which("yt-dlp")
 
 
 def resolve_ffmpeg_dir(setting: str):
@@ -127,6 +133,8 @@ def resolve_ffmpeg_dir(setting: str):
             p = p.parent
         if (p / exe).is_file():
             return str(p)
+    if (app_dir() / exe).is_file():
+        return str(app_dir())
     found = shutil.which("ffmpeg")
     return str(Path(found).parent) if found else None
 
@@ -161,6 +169,21 @@ def build_command(ytdlp: str, ffmpeg_dir, job: dict) -> list:
             # Prefer MP4/M4A streams so the file plays everywhere on Windows.
             cmd += ["-S", "res,ext:mp4:m4a"]
 
+    # Extras
+    if job.get("metadata"):
+        cmd.append("--embed-metadata")
+    if job.get("thumbnail") and not (job["mode"] == "Audio" and job["audio_format"] == "WAV"):
+        cmd.append("--embed-thumbnail")
+    if job.get("subtitles"):
+        langs = ",".join(f"{l.strip()}.*" for l in job.get("sub_langs", "en").split(",") if l.strip()) or "en.*"
+        cmd += ["--sub-langs", langs]
+        if job["mode"] == "Video":
+            cmd.append("--embed-subs")  # put subtitles inside the video file
+        else:
+            cmd += ["--write-subs", "--convert-subs", "srt"]  # separate .srt file
+    if job.get("sponsorblock"):
+        cmd += ["--sponsorblock-remove", "sponsor,selfpromo,interaction"]
+
     cmd += ["-P", job["output_dir"], "-o", "%(title)s.%(ext)s", "--", job["url"]]
     return cmd
 
@@ -170,7 +193,11 @@ def describe(job: dict) -> str:
         text = f"Audio {job['audio_format']} ({job['audio_quality']})"
     else:
         text = f"Video {job['video_quality']} {job['video_format']}"
-    return text + (" + playlist" if job["playlist"] else "")
+    for key, label in (("playlist", "playlist"), ("subtitles", "subs"),
+                       ("thumbnail", "cover"), ("sponsorblock", "no sponsors")):
+        if job.get(key):
+            text += " + " + label
+    return text
 
 
 def kill_process(proc) -> None:
@@ -201,7 +228,7 @@ class App:
         self.item_text = ""
 
         root.title(APP_TITLE)
-        root.minsize(640, 640)
+        root.minsize(660, 720)
         self._build_ui()
         self._on_mode_change()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -275,6 +302,27 @@ class App:
         self.playlist_var = tk.BooleanVar(value=self.cfg["playlist"])
         ttk.Checkbutton(main, text="Download whole playlist",
                         variable=self.playlist_var).grid(row=row, column=1, sticky="w", padx=6, pady=4)
+        row += 1
+
+        # Extra options
+        ttk.Label(main, text="Extras:").grid(row=row, column=0, sticky="nw", pady=4)
+        extras = ttk.Frame(main)
+        extras.grid(row=row, column=1, columnspan=2, sticky="w", padx=6, pady=4)
+        self.thumb_var = tk.BooleanVar(value=self.cfg["thumbnail"])
+        self.meta_var = tk.BooleanVar(value=self.cfg["metadata"])
+        self.subs_var = tk.BooleanVar(value=self.cfg["subtitles"])
+        self.sublang_var = tk.StringVar(value=self.cfg["sub_langs"])
+        self.sponsor_var = tk.BooleanVar(value=self.cfg["sponsorblock"])
+        ttk.Checkbutton(extras, text="Embed cover image / thumbnail",
+                        variable=self.thumb_var).grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(extras, text="Add title / artist info",
+                        variable=self.meta_var).grid(row=0, column=1, sticky="w", padx=(16, 0))
+        subs = ttk.Frame(extras)
+        subs.grid(row=1, column=0, sticky="w")
+        ttk.Checkbutton(subs, text="Subtitles, languages:", variable=self.subs_var).pack(side="left")
+        ttk.Entry(subs, textvariable=self.sublang_var, width=8).pack(side="left", padx=4)
+        ttk.Checkbutton(extras, text="Skip sponsor segments (YouTube)",
+                        variable=self.sponsor_var).grid(row=1, column=1, sticky="w", padx=(16, 0))
         row += 1
 
         # 6. Output folder
@@ -377,6 +425,11 @@ class App:
             "audio_format": self.af_var.get(),
             "audio_quality": self.aq_var.get(),
             "playlist": self.playlist_var.get(),
+            "thumbnail": self.thumb_var.get(),
+            "metadata": self.meta_var.get(),
+            "subtitles": self.subs_var.get(),
+            "sub_langs": self.sublang_var.get(),
+            "sponsorblock": self.sponsor_var.get(),
             "output_dir": self.out_var.get(),
         }
 

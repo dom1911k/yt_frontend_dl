@@ -1,0 +1,42 @@
+name: Build Windows exe
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller
+
+      - name: Build exe
+        run: python -m PyInstaller --onefile --windowed --name "YT Downloader" yt_downloader.py
+
+      - name: Upload exe (Actions artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: YT-Downloader-exe
+          path: dist/YT Downloader.exe
+
+      - name: Publish as "latest" download on the Releases page
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: YT Downloader (latest build)
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          body: |
+            Download **YT Downloader.exe** below and double-click it.
+            Built automatically from commit ${{ github.sha }}.
+          files: dist/YT Downloader.exe

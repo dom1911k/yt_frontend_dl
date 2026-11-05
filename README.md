@@ -3,6 +3,16 @@
 A simple one-window Windows app for downloading videos or audio with **yt-dlp**.
 Everything is in one file: `yt_downloader.py`.
 
+## Easiest: just download the .exe
+
+1. Open the **Releases** page of this repository (right side of the GitHub page) and click **YT Downloader (latest build)**.
+2. Download **YT Downloader.exe** and double-click it. No Python needed.
+
+The .exe is built automatically by GitHub (see `.github/workflows/build-exe.yml`) every time the code changes.
+It looks for `yt-dlp.exe` and `ffmpeg.exe` in `C:\Users\<you>`, next to the .exe, or wherever you set them in **Settings...**.
+
+The steps below are only needed if you want to run or build it yourself.
+
 ## Step 1: Install Python (one time only)
 
 1. Go to <https://www.python.org/downloads/> and click **Download Python 3.x**.
@@ -80,4 +90,7 @@ The settings file is saved next to the .exe, so put the .exe in a normal folder 
 | Audio Best / Medium / Small | `--audio-quality 0` / `192K` / `128K` |
 | Playlist off / on | `--no-playlist` / `--yes-playlist` |
 | Output | `-P "<folder>" -o "%(title)s.%(ext)s"` |
+| Extras: cover image / title info | `--embed-thumbnail` / `--embed-metadata` |
+| Extras: subtitles (e.g. `en, de`) | `--sub-langs "en.*,de.*" --embed-subs` (audio: separate .srt file) |
+| Extras: skip sponsor segments | `--sponsorblock-remove sponsor,selfpromo,interaction` |
 | Always | `--ffmpeg-location "<ffmpeg folder>" --newline --no-mtime` |
