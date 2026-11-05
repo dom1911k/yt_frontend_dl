@@ -16,11 +16,14 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import urllib.request
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 APP_TITLE = "YT Downloader"
+APP_BUILD = 0  # replaced with the real build number by the GitHub build (0 = run from source)
+RELEASE_API = "https://api.github.com/repos/dom1911k/yt_frontend_dl/releases/tags/latest"
 CONFIG_NAME = "yt_downloader_config.json"
 HOME = Path.home()
 IS_WINDOWS = os.name == "nt"
@@ -46,6 +49,7 @@ DEFAULTS = {
     "subtitles": False,
     "sub_langs": "en",
     "sponsorblock": False,
+    "check_app_updates": True,
 }
 
 # Plain-language explanations for common yt-dlp errors (first match wins).
@@ -210,6 +214,30 @@ def kill_process(proc) -> None:
         proc.terminate()
 
 
+def fetch_latest_release():
+    """Return (build_number, exe_download_url) of the newest published build."""
+    req = urllib.request.Request(RELEASE_API, headers={"User-Agent": "YT-Downloader-app",
+                                                       "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        info = json.load(resp)
+    m = re.search(r"build (\d+)", info.get("name", ""), re.IGNORECASE)
+    exe = next((a["browser_download_url"] for a in info.get("assets", [])
+                if a["name"].lower().endswith(".exe")), None)
+    if not m or not exe:
+        raise RuntimeError("No downloadable build was found.")
+    return int(m.group(1)), exe
+
+
+def cleanup_old_exe():
+    """Delete the previous version left behind by an update."""
+    if getattr(sys, "frozen", False):
+        old = Path(sys.executable).with_suffix(".old")
+        try:
+            old.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 # -------------------------------------------------------------------- app --
 
 class App:
@@ -227,12 +255,15 @@ class App:
         self.last_folder = None
         self.item_text = ""
 
-        root.title(APP_TITLE)
+        root.title(APP_TITLE + (f"  (build {APP_BUILD})" if APP_BUILD else ""))
+        self.updating_app = False
         root.minsize(660, 720)
         self._build_ui()
         self._on_mode_change()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.after(100, self.poll)
+        if self.cfg.get("check_app_updates", True) and getattr(sys, "frozen", False):
+            root.after(2000, lambda: self.check_app_update(silent=True))
 
         if not resolve_ytdlp(self.cfg["ytdlp_path"]):
             root.after(300, lambda: (messagebox.showwarning(
@@ -391,6 +422,9 @@ class App:
         self.update_btn = ttk.Button(bottom, text="Update yt-dlp", command=self.update_ytdlp)
         self.update_btn.pack(side="right")
         ttk.Button(bottom, text="Settings...", command=self.open_settings).pack(side="right", padx=6)
+        self.app_update_btn = ttk.Button(bottom, text="Check for app update",
+                                         command=lambda: self.check_app_update(silent=False))
+        self.app_update_btn.pack(side="right")
 
     def _on_mode_change(self):
         if self.mode_var.get() == "Audio":
@@ -474,6 +508,8 @@ class App:
         return [iid for iid in self.tree.get_children() if self.tree.set(iid, "status") == "Waiting"]
 
     def start(self):
+        if self.task == "app_update":
+            return
         if self.task:
             if self.url_var.get().strip():
                 self.add_to_queue()  # busy: just queue it, it will run after the current one
@@ -608,6 +644,8 @@ class App:
                 msg = self.msgs.get_nowait()
                 if msg[0] == "line":
                     self.handle_line(msg[1])
+                elif msg[0].startswith("app_"):
+                    self.handle_app_update(*msg)
                 else:
                     self.handle_done(msg[1], msg[2])
         except queue.Empty:
@@ -668,6 +706,112 @@ class App:
         if iid and self.tree.exists(iid):
             self.tree.set(iid, "status", status)
         self.start_next()
+
+    # ---------------------------------------------------------- app update --
+
+    def check_app_update(self, silent: bool):
+        """Ask GitHub whether a newer build of this app exists (in the background)."""
+        if self.updating_app:
+            return
+        if not getattr(sys, "frozen", False):
+            if not silent:
+                messagebox.showinfo(APP_TITLE, "App updates only work in the .exe version.")
+            return
+        self.updating_app = True
+        self.app_update_btn.configure(state="disabled")
+
+        def work():
+            try:
+                build, url = fetch_latest_release()
+                self.msgs.put(("app_checked", silent, build, url))
+            except Exception as e:
+                self.msgs.put(("app_error", silent, f"Couldn't check for updates ({e})."))
+        threading.Thread(target=work, daemon=True).start()
+
+    def handle_app_update(self, kind, *args):
+        if kind == "app_checked":
+            silent, build, url = args
+            if build <= APP_BUILD:
+                self._app_update_done()
+                if not silent:
+                    messagebox.showinfo(APP_TITLE, f"You have the newest version (build {APP_BUILD}).")
+                return
+            if self.task:
+                self._app_update_done()
+                if not silent:
+                    messagebox.showinfo(APP_TITLE, "A new version is available. Please update "
+                                        "after the current download has finished.")
+                return
+            if not messagebox.askyesno(APP_TITLE, f"A new version of {APP_TITLE} is available "
+                                       f"(build {build}, you have build {APP_BUILD}).\n\n"
+                                       "Update now? The app will restart by itself."):
+                self._app_update_done()
+                return
+            self.set_busy("app_update")
+            self.status_var.set("Downloading the new version...")
+            self.log_line(f"\n=== Updating {APP_TITLE} to build {build} ===", "ok")
+            threading.Thread(target=self._download_app_update, args=(url,), daemon=True).start()
+        elif kind == "app_progress":
+            self.set_progress(args[0])
+        elif kind == "app_ready":
+            self.status_var.set("Restarting...")
+            self.restart_app()
+        elif kind == "app_error":
+            silent, message = args
+            self._app_update_done()
+            if self.task == "app_update":
+                self.set_busy(None)
+                self.status_var.set("Update failed.")
+            self.log_line(message, "error")
+            if not silent:
+                messagebox.showerror(APP_TITLE, message)
+
+    def _app_update_done(self):
+        self.updating_app = False
+        self.app_update_btn.configure(state="normal")
+
+    def _download_app_update(self, url):
+        """Runs in a thread: downloads the new .exe and swaps it in."""
+        exe = Path(sys.executable)
+        new, old = exe.with_suffix(".new"), exe.with_suffix(".old")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "YT-Downloader-app"})
+            with urllib.request.urlopen(req, timeout=30) as resp, open(new, "wb") as f:
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                while chunk := resp.read(256 * 1024):
+                    f.write(chunk)
+                    done += len(chunk)
+                    if total:
+                        self.msgs.put(("app_progress", done * 100 / total))
+            if total and done != total:
+                raise RuntimeError("the download was incomplete")
+            # A running .exe can't be overwritten on Windows, but it can be renamed.
+            old.unlink(missing_ok=True)
+            os.replace(exe, old)
+            try:
+                os.replace(new, exe)
+            except OSError:
+                os.replace(old, exe)  # put the old version back
+                raise
+            self.msgs.put(("app_ready",))
+        except Exception as e:
+            try:
+                new.unlink(missing_ok=True)
+            except OSError:
+                pass
+            hint = " Try moving the app to a normal folder like Desktop." if isinstance(e, PermissionError) else ""
+            self.msgs.put(("app_error", False, f"The update failed ({e}).{hint}"))
+
+    def restart_app(self):
+        env = os.environ.copy()
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"  # start the new .exe as a fresh program
+        for key in list(env):
+            if key.startswith("_MEI") or key.startswith("_PYI"):
+                del env[key]
+        self.remember()
+        subprocess.Popen([sys.executable], env=env, close_fds=True)
+        self.root.destroy()
 
     # ------------------------------------------------------------- display --
 
@@ -758,6 +902,7 @@ def main():
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
             pass
+    cleanup_old_exe()
     root = tk.Tk()
     App(root)
     root.mainloop()

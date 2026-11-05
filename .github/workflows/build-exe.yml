@@ -20,6 +20,12 @@ jobs:
       - name: Install PyInstaller
         run: python -m pip install pyinstaller
 
+      - name: Stamp build number into the app
+        shell: pwsh
+        run: |
+          (Get-Content yt_downloader.py) -replace '^APP_BUILD = 0', "APP_BUILD = ${{ github.run_number }}" | Set-Content -Encoding utf8 yt_downloader.py
+          if (-not (Select-String -Path yt_downloader.py -Pattern "^APP_BUILD = ${{ github.run_number }}")) { throw "build number not stamped" }
+
       - name: Build exe
         run: python -m PyInstaller --onefile --windowed --name "YT Downloader" yt_downloader.py
 
@@ -33,10 +39,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: YT Downloader (latest build)
+          name: YT Downloader (build ${{ github.run_number }})
           target_commitish: ${{ github.sha }}
           make_latest: true
           body: |
             Download **YT Downloader.exe** below and double-click it.
-            Built automatically from commit ${{ github.sha }}.
+            Build ${{ github.run_number }}, made automatically from commit ${{ github.sha }}.
+            The app updates itself; you only need to download this once.
           files: dist/YT Downloader.exe

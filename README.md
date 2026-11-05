@@ -11,6 +11,9 @@ Everything is in one file: `yt_downloader.py`.
 The .exe is built automatically by GitHub (see `.github/workflows/build-exe.yml`) every time the code changes.
 It looks for `yt-dlp.exe` and `ffmpeg.exe` in `C:\Users\<you>`, next to the .exe, or wherever you set them in **Settings...**.
 
+**Updates:** the app checks for a new version each time it starts (and via **Check for app update**).
+If one is available it asks you, downloads it, and restarts by itself. You don't have to download it again.
+
 The steps below are only needed if you want to run or build it yourself.
 
 ## Step 1: Install Python (one time only)
